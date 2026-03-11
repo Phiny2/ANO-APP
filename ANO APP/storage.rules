@@ -1,0 +1,69 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userProfileExists(userId) {
+      return signedIn() &&
+        firestore.exists(/databases/(default)/documents/user_profiles/$(userId));
+    }
+
+    function userProfile(userId) {
+      return firestore.get(/databases/(default)/documents/user_profiles/$(userId)).data;
+    }
+
+    function currentProfileExists() {
+      return userProfileExists(request.auth.uid);
+    }
+
+    function currentProfile() {
+      return userProfile(request.auth.uid);
+    }
+
+    function hasRole(role) {
+      return currentProfileExists() && currentProfile().role == role;
+    }
+
+    function isAdmin() {
+      return hasRole('admin');
+    }
+
+    function teamMembershipExists(staffId) {
+      return signedIn() &&
+        firestore.exists(/databases/(default)/documents/farm_team_members/$(staffId));
+    }
+
+    function teamMembership(staffId) {
+      return firestore.get(/databases/(default)/documents/farm_team_members/$(staffId)).data;
+    }
+
+    function isLinkedStaffForFarmer(farmerId) {
+      return hasRole('staff') &&
+        teamMembershipExists(request.auth.uid) &&
+        teamMembership(request.auth.uid).farmer_id == farmerId;
+    }
+
+    match /crop-enquiries/{farmerId}/{fileName} {
+      allow get: if signedIn() &&
+        (
+          request.auth.uid == farmerId ||
+          isLinkedStaffForFarmer(farmerId) ||
+          hasRole('board') ||
+          hasRole('agronomist') ||
+          isAdmin()
+        );
+
+      allow list: if signedIn() &&
+        (request.auth.uid == farmerId || isLinkedStaffForFarmer(farmerId) || isAdmin());
+
+      allow create, update: if signedIn() &&
+        (request.auth.uid == farmerId || isLinkedStaffForFarmer(farmerId));
+
+      allow delete: if signedIn() &&
+        (request.auth.uid == farmerId || isAdmin());
+    }
+  }
+}

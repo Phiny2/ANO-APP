@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">ANO Crop Advisory</string>
+    <string name="title_activity_main">ANO Crop Advisory</string>
+    <string name="package_name">zw.co.anocropadvisory.app</string>
+    <string name="custom_url_scheme">zw.co.anocropadvisory.app</string>
+</resources>

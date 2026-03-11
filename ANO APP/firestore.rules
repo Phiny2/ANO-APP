@@ -1,0 +1,262 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userProfileExists(userId) {
+      return signedIn() &&
+        exists(/databases/$(database)/documents/user_profiles/$(userId));
+    }
+
+    function userProfile(userId) {
+      return get(/databases/$(database)/documents/user_profiles/$(userId)).data;
+    }
+
+    function currentProfileExists() {
+      return userProfileExists(request.auth.uid);
+    }
+
+    function currentProfile() {
+      return userProfile(request.auth.uid);
+    }
+
+    function hasRole(role) {
+      return currentProfileExists() && currentProfile().role == role;
+    }
+
+    function isAdmin() {
+      return hasRole('admin');
+    }
+
+    function isBoard() {
+      return hasRole('board');
+    }
+
+    function isFarmer() {
+      return hasRole('farmer');
+    }
+
+    function isStaff() {
+      return hasRole('staff');
+    }
+
+    function isAgronomist() {
+      return hasRole('agronomist');
+    }
+
+    function isSelf(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    function teamMembershipExists(staffId) {
+      return signedIn() &&
+        exists(/databases/$(database)/documents/farm_team_members/$(staffId));
+    }
+
+    function teamMembership(staffId) {
+      return get(/databases/$(database)/documents/farm_team_members/$(staffId)).data;
+    }
+
+    function isLinkedStaffForFarmer(farmerId) {
+      return isStaff() &&
+        teamMembershipExists(request.auth.uid) &&
+        teamMembership(request.auth.uid).farmer_id == farmerId;
+    }
+
+    function isFarmerManagingStaff(staffId) {
+      return isFarmer() &&
+        teamMembershipExists(staffId) &&
+        teamMembership(staffId).farmer_id == request.auth.uid;
+    }
+
+    function canAccessFarmerData(farmerId) {
+      return signedIn() &&
+        (isAdmin() || request.auth.uid == farmerId || isLinkedStaffForFarmer(farmerId));
+    }
+
+    function boardMatches(boardId) {
+      return isBoard() && currentProfile().board_id == boardId;
+    }
+
+    function isAgronomistForFarmer(farmerId) {
+      return isAgronomist() &&
+        userProfileExists(farmerId) &&
+        userProfile(farmerId).role == 'farmer' &&
+        userProfile(farmerId).country == currentProfile().country &&
+        userProfile(farmerId).region_id == currentProfile().region_id;
+    }
+
+    function inviteExists(inviteCode) {
+      return exists(/databases/$(database)/documents/farm_team_invites/$(inviteCode));
+    }
+
+    function invite(inviteCode) {
+      return get(/databases/$(database)/documents/farm_team_invites/$(inviteCode)).data;
+    }
+
+    function teamMembershipAfter(staffId) {
+      return getAfter(/databases/$(database)/documents/farm_team_members/$(staffId)).data;
+    }
+
+    match /user_profiles/{userId} {
+      allow get: if isAdmin() ||
+        isSelf(userId) ||
+        (signedIn() && resource.data.role == 'agronomist') ||
+        (isBoard() && resource.data.role == 'farmer') ||
+        (resource.data.role == 'farmer' && isAgronomistForFarmer(userId)) ||
+        (resource.data.role == 'farmer' && isLinkedStaffForFarmer(userId)) ||
+        (resource.data.role == 'staff' && isFarmerManagingStaff(userId));
+
+      allow list: if isAdmin() ||
+        (signedIn() && resource.data.role == 'agronomist') ||
+        (isAgronomist() &&
+          resource.data.role == 'farmer' &&
+          resource.data.country == currentProfile().country &&
+          resource.data.region_id == currentProfile().region_id);
+
+      allow create: if isAdmin() ||
+        (isSelf(userId) &&
+          request.resource.data.email == request.auth.token.email &&
+          (
+            request.resource.data.role == 'farmer' ||
+            request.resource.data.role == 'agronomist' ||
+            (
+              request.resource.data.role == 'staff' &&
+              existsAfter(/databases/$(database)/documents/farm_team_members/$(request.auth.uid)) &&
+              teamMembershipAfter(request.auth.uid).staff_id == request.auth.uid
+            )
+          ));
+
+      allow update: if isAdmin() ||
+        (isSelf(userId) &&
+          request.resource.data.role == resource.data.role &&
+          request.resource.data.email == resource.data.email);
+
+      allow delete: if isAdmin();
+    }
+
+    match /farm_team_invites/{inviteId} {
+      allow get: if (resource.data.is_active == true && resource.data.claimed_at == null) ||
+        isAdmin() ||
+        (isFarmer() && resource.data.farmer_id == request.auth.uid);
+
+      allow list: if isAdmin() ||
+        (isFarmer() && resource.data.farmer_id == request.auth.uid);
+
+      allow create: if isAdmin() ||
+        (isFarmer() &&
+          request.resource.data.farmer_id == request.auth.uid &&
+          request.resource.data.invite_code == inviteId &&
+          request.resource.data.is_active == true &&
+          request.resource.data.claimed_at == null);
+
+      allow update: if isAdmin() ||
+        (
+          signedIn() &&
+          resource.data.is_active == true &&
+          resource.data.claimed_at == null &&
+          request.resource.data.farmer_id == resource.data.farmer_id &&
+          request.resource.data.invite_code == resource.data.invite_code &&
+          request.resource.data.label == resource.data.label &&
+          request.resource.data.team_role == resource.data.team_role &&
+          request.resource.data.created_at == resource.data.created_at &&
+          request.resource.data.is_active == false &&
+          request.resource.data.claimed_at != null &&
+          existsAfter(/databases/$(database)/documents/farm_team_members/$(request.auth.uid)) &&
+          teamMembershipAfter(request.auth.uid).invite_code == inviteId &&
+          teamMembershipAfter(request.auth.uid).staff_id == request.auth.uid &&
+          teamMembershipAfter(request.auth.uid).farmer_id == resource.data.farmer_id
+        );
+
+      allow delete: if isAdmin();
+    }
+
+    match /farm_team_members/{membershipId} {
+      allow get: if isAdmin() ||
+        (signedIn() &&
+          (resource.data.staff_id == request.auth.uid || resource.data.farmer_id == request.auth.uid));
+
+      allow list: if isAdmin() ||
+        (signedIn() &&
+          (resource.data.staff_id == request.auth.uid || resource.data.farmer_id == request.auth.uid));
+
+      allow create: if isAdmin() ||
+        (
+          signedIn() &&
+          membershipId == request.auth.uid &&
+          request.resource.data.staff_id == request.auth.uid &&
+          request.resource.data.status == 'active' &&
+          request.resource.data.invite_code != null &&
+          inviteExists(request.resource.data.invite_code) &&
+          invite(request.resource.data.invite_code).is_active == true &&
+          invite(request.resource.data.invite_code).claimed_at == null &&
+          invite(request.resource.data.invite_code).farmer_id == request.resource.data.farmer_id &&
+          invite(request.resource.data.invite_code).team_role == request.resource.data.team_role
+        );
+
+      allow update, delete: if isAdmin();
+    }
+
+    match /farmer_crop_plans/{planId} {
+      allow get, list: if isAdmin() ||
+        canAccessFarmerData(resource.data.farmer_id) ||
+        boardMatches(resource.data.board_id) ||
+        isAgronomistForFarmer(resource.data.farmer_id);
+
+      allow create: if canAccessFarmerData(request.resource.data.farmer_id);
+
+      allow update: if isAdmin() ||
+        (
+          canAccessFarmerData(resource.data.farmer_id) &&
+          request.resource.data.farmer_id == resource.data.farmer_id &&
+          request.resource.data.crop_id == resource.data.crop_id &&
+          request.resource.data.board_id == resource.data.board_id
+        );
+
+      allow delete: if isAdmin();
+    }
+
+    match /planting_progress_entries/{entryId} {
+      allow get, list: if isAdmin() ||
+        canAccessFarmerData(resource.data.farmer_id) ||
+        isAgronomistForFarmer(resource.data.farmer_id);
+
+      allow create: if canAccessFarmerData(request.resource.data.farmer_id);
+
+      allow update, delete: if isAdmin();
+    }
+
+    match /board_transactions/{transactionId} {
+      allow get, list: if isAdmin() ||
+        canAccessFarmerData(resource.data.farmer_id) ||
+        boardMatches(resource.data.board_id);
+
+      allow create: if canAccessFarmerData(request.resource.data.farmer_id);
+
+      allow update: if isAdmin() ||
+        boardMatches(resource.data.board_id) ||
+        (
+          canAccessFarmerData(resource.data.farmer_id) &&
+          request.resource.data.farmer_id == resource.data.farmer_id &&
+          request.resource.data.crop_id == resource.data.crop_id &&
+          request.resource.data.board_id == resource.data.board_id
+        );
+
+      allow delete: if isAdmin();
+    }
+
+    match /crop_enquiries/{enquiryId} {
+      allow get, list: if isAdmin() ||
+        canAccessFarmerData(resource.data.farmer_id) ||
+        boardMatches(resource.data.board_id) ||
+        isAgronomistForFarmer(resource.data.farmer_id);
+
+      allow create: if canAccessFarmerData(request.resource.data.farmer_id);
+
+      allow update, delete: if isAdmin();
+    }
+  }
+}
